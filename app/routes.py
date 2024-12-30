@@ -2,9 +2,15 @@ from flask import Blueprint, request, jsonify  # Importa Blueprint para manejar 
 from werkzeug.security import check_password_hash  # Para verificar el hash de la contraseña en futuros endpoints.
 from .models import User  # Importa el modelo User desde models.py.
 from .openai_client import get_chat_completion  # Importa la función que interactúa con la API de OpenAI.
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token
 
 # Crea un Blueprint para gestionar las rutas relacionadas con los usuarios y OpenAI.
 main = Blueprint('main', __name__)
+
+@main.route('/')
+def home():
+    return jsonify({'message': 'Bienvenido a la API de Matt-IA'}), 200
 
 # ENDPOINT DE REGISTRO METODO POST
 @main.route('/register', methods=['POST'])
@@ -36,6 +42,25 @@ def register():
     except Exception as e:
         return jsonify({'error': f'Ocurrió un error: {str(e)}'}), 500  # Retorna un error en caso de fallo al guardar.
 
+
+@main.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"msg": "Email y contraseña son requeridos"}), 400
+
+    # Buscar el usuario por email
+    user = User.objects(email=email).first()
+    if user and check_password_hash(user.password, password):
+        # Crear un token de acceso si las credenciales son correctas
+        access_token = create_access_token(identity=str(user.id))  # Guarda la identidad del usuario (por ejemplo, ID)
+        return jsonify(access_token=access_token), 200  # Retorna el token
+    else:
+        return jsonify({"msg": "Correo o contraseña incorrectos"}), 401
+
 # ENDPOINT para OpenAI "ask" método POST
 @main.route('/ask', methods=['POST'])
 def ask_openai():
@@ -65,3 +90,25 @@ def test_backend():
     """
     print("El endpoint '/test-backend' ha sido llamado")
     return jsonify({'message': 'Hola, soy el backend desde Python'}), 200
+
+@main.route('/users', methods=['GET'])
+def get_users():
+    """
+    Endpoint para obtener la lista de usuarios registrados.
+
+    :return: Lista de usuarios en formato JSON.
+    """
+    try:
+        users = User.objects()  # Obtiene todos los usuarios de la base de datos.
+        users_list = [{'username': user.username, 'email': user.email} for user in users]  # Crea una lista de diccionarios con los datos de los usuarios.
+        return jsonify({'users': users_list}), 200  # Retorna la lista de usuarios en formato JSON.
+    except Exception as e:
+        return jsonify({'error': f'Ocurrió un error al obtener los usuarios: {str(e)}'}), 500  # Manejo de errores en caso de fallo al obtener los usuarios.
+    
+    
+@main.route('/protected', methods=['GET'])
+@jwt_required()  # Esta ruta requiere autenticación
+def protected():
+    current_user_id = get_jwt_identity()  # Obtiene la identidad del usuario desde el token
+    user = User.objects(id=current_user_id).first()
+    return jsonify({'username': user.username, 'email': user.email}), 200
