@@ -1,9 +1,10 @@
-from flask import Blueprint, request, jsonify  # Importa Blueprint para manejar las rutas, request para obtener datos del cuerpo de la solicitud y jsonify para retornar respuestas en formato JSON.
-from werkzeug.security import check_password_hash  # Para verificar el hash de la contraseña en futuros endpoints.
-from .models import User  # Importa el modelo User desde models.py.
-from .openai_client import get_chat_completion  # Importa la función que interactúa con la API de OpenAI.
+from flask import Blueprint, request, jsonify  
+from werkzeug.security import check_password_hash  
+from .models import User, Thread, Message 
+from .openai_client import get_chat_completion  
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_jwt_extended import create_access_token
+from mongoengine.errors import DoesNotExist  # Para manejar errores de MongoDB
 
 # Crea un Blueprint para gestionar las rutas relacionadas con los usuarios y OpenAI.
 main = Blueprint('main', __name__)
@@ -15,33 +16,24 @@ def home():
 # ENDPOINT DE REGISTRO METODO POST
 @main.route('/register', methods=['POST'])
 def register():
-    """
-    Endpoint para registrar un nuevo usuario.
-
-    :return: Mensaje de éxito o error en formato JSON.
-    """
     data = request.get_json()  # Obtiene los datos enviados en formato JSON.
     username = data.get('username')  # Extrae el nombre de usuario.
     email = data.get('email')  # Extrae el email.
     password = data.get('password')  # Extrae la contraseña.
 
-    # Validación para asegurarse de que se envíen todos los campos requeridos.
     if not username or not email or not password:
-        return jsonify({'error': 'Faltan datos'}), 400  # Si falta algún dato, retorna un error.
+        return jsonify({'error': 'Faltan datos'}), 400
 
-    # Comprueba si el nombre de usuario o el email ya están registrados.
     if User.objects(username=username).first() or User.objects(email=email).first():  
-        return jsonify({'error': 'Usuario o email ya registrado, inténtelo de nuevo'}), 400  # Retorna un error si ya están registrados.
+        return jsonify({'error': 'Usuario o email ya registrado, inténtelo de nuevo'}), 400
 
-    # Crea un nuevo usuario y guarda en la base de datos.
     try:
         user = User(username=username, email=email)  # Crea una instancia de User con el nombre de usuario y el email.
         user.set_password(password)  # Establece la contraseña en formato hash.
         user.save()  # Guarda el usuario en la base de datos.
-        return jsonify({'message': 'El usuario se ha registrado con éxito'}), 201  # Retorna un mensaje de éxito.
+        return jsonify({'message': 'El usuario se ha registrado con éxito'}), 201
     except Exception as e:
-        return jsonify({'error': f'Ocurrió un error: {str(e)}'}), 500  # Retorna un error en caso de fallo al guardar.
-
+        return jsonify({'error': f'Ocurrió un error: {str(e)}'}), 500
 
 @main.route('/login', methods=['POST'])
 def login():
@@ -52,63 +44,122 @@ def login():
     if not email or not password:
         return jsonify({"msg": "Email y contraseña son requeridos"}), 400
 
-    # Buscar el usuario por email
     user = User.objects(email=email).first()
     if user and check_password_hash(user.password, password):
-        # Crear un token de acceso si las credenciales son correctas
         access_token = create_access_token(identity=str(user.id))  # Guarda la identidad del usuario (por ejemplo, ID)
-        return jsonify(access_token=access_token), 200  # Retorna el token
+        return jsonify(access_token=access_token), 200
     else:
         return jsonify({"msg": "Correo o contraseña incorrectos"}), 401
 
-# ENDPOINT para OpenAI "ask" método POST
 @main.route('/ask', methods=['POST'])
 def ask_openai():
-    """
-    Endpoint para enviar una pregunta a la API de OpenAI y obtener una respuesta.
+    data = request.get_json()
+    prompt = data.get('prompt')
 
-    :return: Respuesta generada por la API de OpenAI.
-    """
-    data = request.get_json()  # Obtiene los datos en formato JSON de la solicitud.
-    prompt = data.get('prompt')  # Extrae el mensaje (prompt) del cuerpo de la solicitud.
-
-    if not prompt:  # Si no se proporciona el prompt, retorna un error.
+    if not prompt:
         return jsonify({'error': 'Falta el mensaje (prompt)'}), 400
 
-    # Llama a la función para obtener una respuesta de OpenAI.
     try:
         response = get_chat_completion(prompt)  # Envía el prompt a OpenAI y obtiene una respuesta.
-        return jsonify({'response': response}), 200  # Retorna la respuesta generada por OpenAI.
+        return jsonify({'response': response}), 200
     except Exception as e:
-        return jsonify({'error': f'Ocurrió un error al procesar la solicitud: {str(e)}'}), 500  # Manejo de errores en caso de fallo en la API de OpenAI.
+        return jsonify({'error': f'Ocurrió un error al procesar la solicitud: {str(e)}'}), 500
 
 @main.route('/test-backend', methods=['GET'])
 def test_backend():
-    """
-    Endpoint para verificar que el backend está funcionando.
-    Retorna un mensaje simple.
-    """
     print("El endpoint '/test-backend' ha sido llamado")
     return jsonify({'message': 'Hola, soy el backend desde Python'}), 200
 
 @main.route('/users', methods=['GET'])
 def get_users():
-    """
-    Endpoint para obtener la lista de usuarios registrados.
-
-    :return: Lista de usuarios en formato JSON.
-    """
     try:
-        users = User.objects()  # Obtiene todos los usuarios de la base de datos.
-        users_list = [{'username': user.username, 'email': user.email} for user in users]  # Crea una lista de diccionarios con los datos de los usuarios.
-        return jsonify({'users': users_list}), 200  # Retorna la lista de usuarios en formato JSON.
+        users = User.objects()
+        users_list = [{'username': user.username, 'email': user.email} for user in users]
+        return jsonify({'users': users_list}), 200
     except Exception as e:
-        return jsonify({'error': f'Ocurrió un error al obtener los usuarios: {str(e)}'}), 500  # Manejo de errores en caso de fallo al obtener los usuarios.
-    
-    
+        return jsonify({'error': f'Ocurrió un error al obtener los usuarios: {str(e)}'}), 500
+
 @main.route('/protected', methods=['GET'])
-@jwt_required()  # Esta ruta requiere autenticación
+@jwt_required()
 def protected():
-    current_user_id = get_jwt_identity()  # Obtiene la identidad del usuario desde el token
+    current_user_id = get_jwt_identity()
     user = User.objects(id=current_user_id).first()
     return jsonify({'username': user.username, 'email': user.email}), 200
+
+# RUTAS PARA MANEJO DE HILOS Y MENSAJES
+
+@main.route('/threads', methods=['POST'])
+@jwt_required()
+def create_thread():
+    data = request.get_json()
+    title = data.get('title')
+
+    if not title:
+        return jsonify({'error': 'El título es obligatorio'}), 400
+
+    current_user_id = get_jwt_identity()
+    user = User.objects(id=current_user_id).first()
+
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    thread = Thread(user=user, title=title)
+    thread.save()
+    return jsonify({'message': 'Hilo creado con éxito', 'thread_id': str(thread.id)}), 201
+
+@main.route('/threads', methods=['GET'])
+@jwt_required()
+def get_threads():
+    current_user_id = get_jwt_identity()
+    user = User.objects(id=current_user_id).first()
+
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    threads = Thread.objects(user=user)
+    threads_list = [{'id': str(thread.id), 'title': thread.title, 'created_at': thread.created_at.isoformat()} for thread in threads]
+    return jsonify({'threads': threads_list}), 200
+
+@main.route('/threads/<thread_id>', methods=['DELETE'])
+@jwt_required()
+def delete_thread(thread_id):
+    current_user_id = get_jwt_identity()
+
+    try:
+        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        thread.delete()
+        return jsonify({'message': 'Hilo eliminado con éxito'}), 200
+    except DoesNotExist:
+        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
+
+@main.route('/threads/<thread_id>/messages', methods=['POST'])
+@jwt_required()
+def create_message(thread_id):
+    data = request.get_json()
+    content = data.get('content')
+
+    if not content:
+        return jsonify({'error': 'El contenido del mensaje es obligatorio'}), 400
+
+    current_user_id = get_jwt_identity()
+
+    try:
+        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        message = Message(thread=thread, sender='user', content=content)
+        message.save()
+        return jsonify({'message': 'Mensaje creado con éxito', 'message_id': str(message.id)}), 201
+    except DoesNotExist:
+        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
+
+@main.route('/threads/<thread_id>/messages', methods=['GET'])
+@jwt_required()
+def get_messages(thread_id):
+    current_user_id = get_jwt_identity()
+
+    try:
+        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        messages = Message.objects(thread=thread)
+        messages_list = [{'id': str(message.id), 'sender': message.sender, 'content': message.content, 'created_at': message.created_at.isoformat()} for message in messages]
+        return jsonify({'messages': messages_list}), 200
+    except DoesNotExist:
+        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
