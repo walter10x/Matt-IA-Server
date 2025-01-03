@@ -98,14 +98,19 @@ def create_thread():
         return jsonify({'error': 'El título es obligatorio'}), 400
 
     current_user_id = get_jwt_identity()
+
+    # Obtener el usuario directamente desde su ID usando ReferenceField
     user = User.objects(id=current_user_id).first()
 
     if not user:
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
+    # Crear el hilo con la referencia al usuario
     thread = Thread(user=user, title=title)
     thread.save()
+
     return jsonify({'message': 'Hilo creado con éxito', 'thread_id': str(thread.id)}), 201
+
 
 @main.route('/threads', methods=['GET'])
 @jwt_required()
@@ -123,14 +128,25 @@ def get_threads():
 @main.route('/threads/<thread_id>', methods=['DELETE'])
 @jwt_required()
 def delete_thread(thread_id):
-    current_user_id = get_jwt_identity()
+    current_user_id = get_jwt_identity()  # Esto debería ser un String
 
     try:
-        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        # Buscar el hilo por su ID
+        thread = Thread.objects.get(id=thread_id)
+
+        # Verificar si el hilo pertenece al usuario autenticado
+        if str(thread.user.id) != str(current_user_id):  # Aseguramos que ambos son Strings
+            return jsonify({'error': 'No tienes permiso para eliminar este hilo'}), 403
+
+        # Eliminar el hilo si el usuario es el propietario
         thread.delete()
+
         return jsonify({'message': 'Hilo eliminado con éxito'}), 200
-    except DoesNotExist:
-        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
+    except Thread.DoesNotExist:
+        return jsonify({'error': 'Hilo no encontrado'}), 404
+
+
+
 
 @main.route('/threads/<thread_id>/messages', methods=['POST'])
 @jwt_required()

@@ -22,8 +22,9 @@ class Thread(Document):
     Modelo para representar un hilo de conversación.
     """
     user = ReferenceField(User, required=True, reverse_delete_rule=2)  # Relación con el usuario propietario
-    title = StringField()  # Título opcional del hilo
+    title = StringField(required=True)  # Título obligatorio del hilo
     created_at = DateTimeField(default=datetime.utcnow)  # Fecha de creación
+
 
 class Message(Document):
     """
