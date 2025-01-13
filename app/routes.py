@@ -28,12 +28,23 @@ def register():
         return jsonify({'error': 'Usuario o email ya registrado, inténtelo de nuevo'}), 400
 
     try:
-        user = User(username=username, email=email)  # Crea una instancia de User con el nombre de usuario y el email.
+        # Crea una nueva instancia de usuario
+        user = User(username=username, email=email)
         user.set_password(password)  # Establece la contraseña en formato hash.
-        user.save()  # Guarda el usuario en la base de datos.
-        return jsonify({'message': 'El usuario se ha registrado con éxito'}), 201
+        user.save()  # Guarda el usuario en la base de datos
+
+        # Crear el JSON de respuesta excluyendo la contraseña
+        user_data = {
+            'id': str(user.id),
+            'username': user.username,
+            'email': user.email,
+            'threads': [str(thread.id) for thread in user.threads]  # Si quieres devolver los hilos asociados
+        }
+
+        return jsonify({'message': 'El usuario se ha registrado con éxito', 'user': user_data}), 201
     except Exception as e:
         return jsonify({'error': f'Ocurrió un error: {str(e)}'}), 500
+
 
 @main.route('/login', methods=['POST'])
 def login():
