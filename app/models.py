@@ -1,4 +1,4 @@
-from mongoengine import Document, StringField, ReferenceField, ListField, DateTimeField
+from mongoengine import Document, StringField, ReferenceField, ListField, DateTimeField, BooleanField
 from werkzeug.security import generate_password_hash
 from datetime import datetime
 
@@ -24,6 +24,7 @@ class Thread(Document):
     user = ReferenceField(User, required=True, reverse_delete_rule=2)  # Relación con el usuario propietario
     title = StringField(required=True)  # Título obligatorio del hilo
     created_at = DateTimeField(default=datetime.utcnow)  # Fecha de creación
+    is_active = BooleanField(default=True)
 
 
 class Message(Document):
@@ -31,6 +32,7 @@ class Message(Document):
     Modelo para representar un mensaje dentro de un hilo.
     """
     thread = ReferenceField(Thread, required=True, reverse_delete_rule=2)  # Relación con el hilo
-    sender = StringField(required=True, choices=('user', 'system'))  # Quién envió el mensaje
+    sender = StringField(required=True, choices=('user', 'system', 'assistant'))  # Quién envió el mensaje
     content = StringField(required=True)  # Contenido del mensaje
     created_at = DateTimeField(default=datetime.utcnow)  # Fecha de creación
+

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify  
+from flask import Blueprint, request, jsonify, current_app  # Added current_app for logging
 from werkzeug.security import check_password_hash  
 from .models import User, Thread, Message 
 from .openai_client import get_chat_completion  
@@ -63,7 +63,9 @@ def login():
         return jsonify({"msg": "Correo o contraseña incorrectos"}), 401
 
 @main.route('/ask', methods=['POST'])
+@jwt_required()
 def ask_openai():
+    current_user_id = get_jwt_identity()  # Obtiene el ID del usuario autenticado
     data = request.get_json()
     prompt = data.get('prompt')
 
@@ -71,10 +73,37 @@ def ask_openai():
         return jsonify({'error': 'Falta el mensaje (prompt)'}), 400
 
     try:
-        response = get_chat_completion(prompt)  # Envía el prompt a OpenAI y obtiene una respuesta.
-        return jsonify({'response': response}), 200
+        # Verificar si ya existe un hilo activo para el usuario
+        active_thread = Thread.objects(user=current_user_id).first()  # Busca un hilo existente por ID de usuario
+        if not active_thread:
+            # Si no existe, crea uno nuevo
+            active_thread = Thread(user=User.objects.get(id=current_user_id), title="Nuevo chat")
+            active_thread.save()
+
+        # Obtener respuesta de OpenAI
+        response = get_chat_completion(prompt)
+
+        # Guardar mensaje del usuario
+        user_message = Message(thread=active_thread, sender='user', content=prompt)
+        user_message.save()
+
+        # Guardar respuesta del asistente
+        assistant_message = Message(thread=active_thread, sender='assistant', content=response)
+        assistant_message.save()
+
+        return jsonify({
+            'response': response,
+            'thread_id': str(active_thread.id),
+            'user_message_id': str(user_message.id),
+            'assistant_message_id': str(assistant_message.id)
+        }), 200
     except Exception as e:
+        current_app.logger.error(f'Error en ask_openai: {str(e)}')
         return jsonify({'error': f'Ocurrió un error al procesar la solicitud: {str(e)}'}), 500
+
+
+
+
 
 @main.route('/test-backend', methods=['GET'])
 def test_backend():
@@ -171,12 +200,20 @@ def create_message(thread_id):
     current_user_id = get_jwt_identity()
 
     try:
-        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        # Cambia user__id a user.id
+        thread = Thread.objects.get(id=thread_id, user=current_user_id)
         message = Message(thread=thread, sender='user', content=content)
         message.save()
         return jsonify({'message': 'Mensaje creado con éxito', 'message_id': str(message.id)}), 201
     except DoesNotExist:
+        current_app.logger.error(f'Hilo {thread_id} no encontrado o no pertenece al usuario {current_user_id}')
         return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
+    except Exception as e:
+        current_app.logger.error(f'Error al crear mensaje: {str(e)}')
+        return jsonify({'error': 'Ocurrió un error al crear el mensaje'}), 500
+
+
+
 
 @main.route('/threads/<thread_id>/messages', methods=['GET'])
 @jwt_required()
@@ -184,9 +221,31 @@ def get_messages(thread_id):
     current_user_id = get_jwt_identity()
 
     try:
-        thread = Thread.objects.get(id=thread_id, user__id=current_user_id)
+        # Cambia user__id a user.id
+        thread = Thread.objects.get(id=thread_id, user=current_user_id)
         messages = Message.objects(thread=thread)
         messages_list = [{'id': str(message.id), 'sender': message.sender, 'content': message.content, 'created_at': message.created_at.isoformat()} for message in messages]
         return jsonify({'messages': messages_list}), 200
     except DoesNotExist:
+        current_app.logger.error(f'Hilo {thread_id} no encontrado o no pertenece al usuario {current_user_id}')
         return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
+    except Exception as e:
+        current_app.logger.error(f'Error al obtener mensajes: {str(e)}')
+        return jsonify({'error': 'Ocurrió un error al obtener los mensajes'}), 500
+
+
+        
+@main.route('/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    current_user_id = get_jwt_identity()
+    try:
+        user = User.objects.get(id=current_user_id)
+        user_data = {
+            'id': str(user.id),
+            'username': user.username,
+            'email': user.email
+        }
+        return jsonify({'user': user_data}), 200
+    except DoesNotExist:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
