@@ -1,21 +1,21 @@
 from flask import Flask
-from .config import Config
 from mongoengine import connect
-from dotenv import load_dotenv
-from flask_jwt_extended import JWTManager
-import os
+import firebase_admin
+from firebase_admin import credentials
+from .config import Config
 
 def create_app():
-    load_dotenv()
-
     app = Flask(__name__)
     app.config.from_object(Config)
-    
-    
 
-    connect(host=os.getenv('MONGO_URI'))
-    jwt = JWTManager(app)
+    # Conexión a MongoDB
+    connect(host=app.config['MONGODB_URI'])
 
+    # Inicialización de Firebase
+    cred = credentials.Certificate(app.config['FIREBASE_CREDENTIALS_PATH'])
+    firebase_admin.initialize_app(cred)
+
+    # Importar y registrar rutas
     from .routes import main
     app.register_blueprint(main)
 

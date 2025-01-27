@@ -1,251 +1,220 @@
-from flask import Blueprint, request, jsonify, current_app  # Added current_app for logging
-from werkzeug.security import check_password_hash  
-from .models import User, Thread, Message 
-from .openai_client import get_chat_completion  
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from flask_jwt_extended import create_access_token
-from mongoengine.errors import DoesNotExist  # Para manejar errores de MongoDB
+from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
+from google_auth_oauthlib.flow import Flow
+from google.oauth2 import id_token
+from google.auth.transport import requests
+import requests
+from firebase_admin import auth
+from firebase_admin import exceptions as firebase_exceptions
+from mongoengine import errors as mongo_errors, NotUniqueError
+from .config import Config
 
-# Crea un Blueprint para gestionar las rutas relacionadas con los usuarios y OpenAI.
+from datetime import datetime
+
+from .models import User
+
 main = Blueprint('main', __name__)
 
 @main.route('/')
-def home():
-    return jsonify({'message': 'Bienvenido a la API de Matt-IA'}), 200
+def index():
+    if 'user' in session:
+        return f"Bienvenido a Matt-IA, {session['user']['name']}. <a href='/perfil'>Ver perfil</a> | <a href='/logout'>Cerrar sesión</a>"
+    else:
+        return "Bienvenido a Matt-IA. <a href='/login/google'>Iniciar sesión con Google</a>"
+    
+    #ENDPOIN PARA EL REGISTRO CON FIREBASE 
 
-# ENDPOINT DE REGISTRO METODO POST
 @main.route('/register', methods=['POST'])
 def register():
-    data = request.get_json()  # Obtiene los datos enviados en formato JSON.
-    username = data.get('username')  # Extrae el nombre de usuario.
-    email = data.get('email')  # Extrae el email.
-    password = data.get('password')  # Extrae la contraseña.
+    email = request.json.get('email')
+    password = request.json.get('password')
+    username = request.json.get('username')
 
-    if not username or not email or not password:
-        return jsonify({'error': 'Faltan datos'}), 400
-
-    if User.objects(username=username).first() or User.objects(email=email).first():  
-        return jsonify({'error': 'Usuario o email ya registrado, inténtelo de nuevo'}), 400
+    if not email or not password or not username:
+        return jsonify({"error": "Email, contraseña y nombre de usuario son requeridos"}), 400
 
     try:
-        # Crea una nueva instancia de usuario
-        user = User(username=username, email=email)
-        user.set_password(password)  # Establece la contraseña en formato hash.
-        user.save()  # Guarda el usuario en la base de datos
+        # Verificar si el email ya existe en Firebase
+        try:
+            auth.get_user_by_email(email)
+            return jsonify({"error": "Este correo electrónico ya está registrado. Por favor, usa otro."}), 400
+        except auth.UserNotFoundError:
+            pass
 
-        # Crear el JSON de respuesta excluyendo la contraseña
-        user_data = {
-            'id': str(user.id),
-            'username': user.username,
-            'email': user.email,
-            'threads': [str(thread.id) for thread in user.threads]  # Si quieres devolver los hilos asociados
-        }
+        # Verificar si el email o username ya existen en MongoDB
+        existing_user = User.objects(email=email).first()
+        if existing_user:
+            return jsonify({"error": "Este correo electrónico ya está en uso. Por favor, elige otro."}), 400
 
-        return jsonify({'message': 'El usuario se ha registrado con éxito', 'user': user_data}), 201
+        existing_user = User.objects(username=username).first()
+        if existing_user:
+            return jsonify({"error": "Este nombre de usuario ya está tomado. Por favor, elige otro."}), 400
+
+        # Crear usuario en Firebase
+        firebase_user = auth.create_user(
+            email=email,
+            password=password
+        )
+
+        # Crear usuario en MongoDB
+        mongo_user = User(
+            firebase_uid=firebase_user.uid,
+            email=email,
+            username=username
+        )
+        mongo_user.save()
+
+        return jsonify({
+            "message": "Usuario registrado exitosamente",
+            "uid": firebase_user.uid
+        }), 201
+
+    except firebase_exceptions.FirebaseError as e:
+        return jsonify({"error": "Hubo un problema al registrar el usuario. Por favor, inténtalo de nuevo."}), 400
+    except NotUniqueError as e:
+        error_message = str(e)
+        if 'email' in error_message:
+            return jsonify({"error": "Este correo electrónico ya está en uso. Por favor, elige otro."}), 400
+        elif 'username' in error_message:
+            return jsonify({"error": "Este nombre de usuario ya está tomado. Por favor, elige otro."}), 400
+        elif 'firebase_uid' in error_message:
+            return jsonify({"error": "Ha ocurrido un error inesperado. Por favor, inténtalo de nuevo."}), 400
+        else:
+            return jsonify({"error": "Ha ocurrido un error al registrar el usuario. Por favor, verifica tus datos e inténtalo de nuevo."}), 400
+    except mongo_errors.MongoEngineException as e:
+        return jsonify({"error": "Hubo un problema al guardar tus datos. Por favor, inténtalo de nuevo."}), 400
     except Exception as e:
-        return jsonify({'error': f'Ocurrió un error: {str(e)}'}), 500
-
+        error_message = str(e)
+        if "duplicate key error" in error_message and "firebase_uid" in error_message:
+            return jsonify({"error": "Ha ocurrido un error inesperado. Por favor, inténtalo de nuevo más tarde."}), 400
+        else:
+            return jsonify({"error": "Ha ocurrido un error inesperado. Por favor, inténtalo de nuevo."}), 500
+        
+        #ENDPOINT PARA EL LOGIN CON FIREBASE
 
 @main.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
+    email = request.json.get('email')
+    password = request.json.get('password')
 
     if not email or not password:
-        return jsonify({"msg": "Email y contraseña son requeridos"}), 400
+        return jsonify({"error": "Email y contraseña son requeridos"}), 400
 
-    user = User.objects(email=email).first()
-    if user and check_password_hash(user.password, password):
-        access_token = create_access_token(identity=str(user.id))  # Guarda la identidad del usuario (por ejemplo, ID)
-        return jsonify(access_token=access_token), 200
+    try:
+        # Obtener la clave de API web de Firebase desde la configuración
+        web_api_key = Config.FIREBASE_WEB_API_KEY
+
+        # Usar la API REST de Firebase para iniciar sesión
+        response = requests.post(
+            f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={web_api_key}",
+            json={
+                "email": email,
+                "password": password,
+                "returnSecureToken": True
+            }
+        )
+
+        if response.status_code == 200:
+            auth_data = response.json()
+            # Verificar el token ID
+            decoded_token = auth.verify_id_token(auth_data['idToken'])
+            
+            return jsonify({
+                "message": "Inicio de sesión exitoso",
+                "uid": decoded_token['uid'],
+                "email": decoded_token['email'],
+                "token": auth_data['idToken']
+            }), 200
+        else:
+            return jsonify({"error": "Credenciales inválidas"}), 401
+
+    except auth.InvalidIdTokenError:
+        return jsonify({"error": "Token inválido"}), 401
+    except requests.RequestException as e:
+        return jsonify({"error": f"Error de red: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error en el inicio de sesión: {str(e)}"}), 500
+
+@main.route('/login/google')
+def google_login():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": current_app.config['GOOGLE_CLIENT_ID'],
+                "client_secret": current_app.config['GOOGLE_SECRET'],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
+    )
+    flow.redirect_uri = current_app.config['GOOGLE_REDIRECT_URI']
+    authorization_url, state = flow.authorization_url(prompt='select_account')
+    session['state'] = state
+    return redirect(authorization_url)
+
+@main.route('/login/google/callback')
+def google_callback():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": current_app.config['GOOGLE_CLIENT_ID'],
+                "client_secret": current_app.config['GOOGLE_SECRET'],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
+        state=session['state']
+    )
+    flow.redirect_uri = current_app.config['GOOGLE_REDIRECT_URI']
+
+    flow.fetch_token(authorization_response=request.url)
+
+    credentials = flow.credentials
+    id_info = id_token.verify_oauth2_token(
+        credentials.id_token, requests.Request(), current_app.config['GOOGLE_CLIENT_ID']
+    )
+
+    # Crear un token personalizado de Firebase
+    custom_token = auth.create_custom_token(id_info['sub'])
+
+    # Buscar o crear usuario en MongoDB
+    user = User.objects(google_id=id_info['sub']).first()
+    if user:
+        user.name = id_info.get('name', '')
+        user.email = id_info['email']
+        user.picture = id_info.get('picture', '')
+        user.last_login = datetime.utcnow()
+        user.save()
     else:
-        return jsonify({"msg": "Correo o contraseña incorrectos"}), 401
+        user = User.create_google_user(
+            google_id=id_info['sub'],
+            email=id_info['email'],
+            name=id_info.get('name', ''),
+            picture=id_info.get('picture', '')
+        )
 
-@main.route('/ask', methods=['POST'])
-@jwt_required()
-def ask_openai():
-    current_user_id = get_jwt_identity()  # Obtiene el ID del usuario autenticado
-    data = request.get_json()
-    prompt = data.get('prompt')
+    # Almacenar información del usuario en la sesión
+    session['user'] = {
+        'id': str(user.id),
+        'google_id': user.google_id,
+        'email': user.email,
+        'name': user.name,
+        'picture': user.picture
+    }
 
-    if not prompt:
-        return jsonify({'error': 'Falta el mensaje (prompt)'}), 400
+    # Aquí puedes decidir a dónde redirigir al usuario después del login
+    return redirect(url_for('main.perfil'))
 
-    try:
-        # Verificar si ya existe un hilo activo para el usuario
-        active_thread = Thread.objects(user=current_user_id).first()  # Busca un hilo existente por ID de usuario
-        if not active_thread:
-            # Si no existe, crea uno nuevo
-            active_thread = Thread(user=User.objects.get(id=current_user_id), title="Nuevo chat")
-            active_thread.save()
+@main.route('/perfil')
+def perfil():
+    if 'user' in session:
+        return f"Bienvenido, {session['user']['name']}. Tu email es: {session['user']['email']}"
+    else:
+        return "No has iniciado sesión."
 
-        # Obtener respuesta de OpenAI
-        response = get_chat_completion(prompt)
+@main.route('/logout')
+def logout():
+    session.pop('user', None)
+    return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
 
-        # Guardar mensaje del usuario
-        user_message = Message(thread=active_thread, sender='user', content=prompt)
-        user_message.save()
-
-        # Guardar respuesta del asistente
-        assistant_message = Message(thread=active_thread, sender='assistant', content=response)
-        assistant_message.save()
-
-        return jsonify({
-            'response': response,
-            'thread_id': str(active_thread.id),
-            'user_message_id': str(user_message.id),
-            'assistant_message_id': str(assistant_message.id)
-        }), 200
-    except Exception as e:
-        current_app.logger.error(f'Error en ask_openai: {str(e)}')
-        return jsonify({'error': f'Ocurrió un error al procesar la solicitud: {str(e)}'}), 500
-
-
-
-
-
-@main.route('/test-backend', methods=['GET'])
-def test_backend():
-    print("El endpoint '/test-backend' ha sido llamado")
-    return jsonify({'message': 'Hola, soy el backend desde Python'}), 200
-
-@main.route('/users', methods=['GET'])
-def get_users():
-    try:
-        users = User.objects()
-        users_list = [{'username': user.username, 'email': user.email} for user in users]
-        return jsonify({'users': users_list}), 200
-    except Exception as e:
-        return jsonify({'error': f'Ocurrió un error al obtener los usuarios: {str(e)}'}), 500
-
-@main.route('/protected', methods=['GET'])
-@jwt_required()
-def protected():
-    current_user_id = get_jwt_identity()
-    user = User.objects(id=current_user_id).first()
-    return jsonify({'username': user.username, 'email': user.email}), 200
-
-# RUTAS PARA MANEJO DE HILOS Y MENSAJES
-
-@main.route('/threads', methods=['POST'])
-@jwt_required()
-def create_thread():
-    data = request.get_json()
-    title = data.get('title')
-
-    if not title:
-        return jsonify({'error': 'El título es obligatorio'}), 400
-
-    current_user_id = get_jwt_identity()
-
-    # Obtener el usuario directamente desde su ID usando ReferenceField
-    user = User.objects(id=current_user_id).first()
-
-    if not user:
-        return jsonify({'error': 'Usuario no encontrado'}), 404
-
-    # Crear el hilo con la referencia al usuario
-    thread = Thread(user=user, title=title)
-    thread.save()
-
-    return jsonify({'message': 'Hilo creado con éxito', 'thread_id': str(thread.id)}), 201
-
-
-@main.route('/threads', methods=['GET'])
-@jwt_required()
-def get_threads():
-    current_user_id = get_jwt_identity()
-    user = User.objects(id=current_user_id).first()
-
-    if not user:
-        return jsonify({'error': 'Usuario no encontrado'}), 404
-
-    threads = Thread.objects(user=user)
-    threads_list = [{'id': str(thread.id), 'title': thread.title, 'created_at': thread.created_at.isoformat()} for thread in threads]
-    return jsonify({'threads': threads_list}), 200
-
-@main.route('/threads/<thread_id>', methods=['DELETE'])
-@jwt_required()
-def delete_thread(thread_id):
-    current_user_id = get_jwt_identity()  # Esto debería ser un String
-
-    try:
-        # Buscar el hilo por su ID
-        thread = Thread.objects.get(id=thread_id)
-
-        # Verificar si el hilo pertenece al usuario autenticado
-        if str(thread.user.id) != str(current_user_id):  # Aseguramos que ambos son Strings
-            return jsonify({'error': 'No tienes permiso para eliminar este hilo'}), 403
-
-        # Eliminar el hilo si el usuario es el propietario
-        thread.delete()
-
-        return jsonify({'message': 'Hilo eliminado con éxito'}), 200
-    except Thread.DoesNotExist:
-        return jsonify({'error': 'Hilo no encontrado'}), 404
-
-
-
-
-@main.route('/threads/<thread_id>/messages', methods=['POST'])
-@jwt_required()
-def create_message(thread_id):
-    data = request.get_json()
-    content = data.get('content')
-
-    if not content:
-        return jsonify({'error': 'El contenido del mensaje es obligatorio'}), 400
-
-    current_user_id = get_jwt_identity()
-
-    try:
-        # Cambia user__id a user.id
-        thread = Thread.objects.get(id=thread_id, user=current_user_id)
-        message = Message(thread=thread, sender='user', content=content)
-        message.save()
-        return jsonify({'message': 'Mensaje creado con éxito', 'message_id': str(message.id)}), 201
-    except DoesNotExist:
-        current_app.logger.error(f'Hilo {thread_id} no encontrado o no pertenece al usuario {current_user_id}')
-        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
-    except Exception as e:
-        current_app.logger.error(f'Error al crear mensaje: {str(e)}')
-        return jsonify({'error': 'Ocurrió un error al crear el mensaje'}), 500
-
-
-
-
-@main.route('/threads/<thread_id>/messages', methods=['GET'])
-@jwt_required()
-def get_messages(thread_id):
-    current_user_id = get_jwt_identity()
-
-    try:
-        # Cambia user__id a user.id
-        thread = Thread.objects.get(id=thread_id, user=current_user_id)
-        messages = Message.objects(thread=thread)
-        messages_list = [{'id': str(message.id), 'sender': message.sender, 'content': message.content, 'created_at': message.created_at.isoformat()} for message in messages]
-        return jsonify({'messages': messages_list}), 200
-    except DoesNotExist:
-        current_app.logger.error(f'Hilo {thread_id} no encontrado o no pertenece al usuario {current_user_id}')
-        return jsonify({'error': 'Hilo no encontrado o no pertenece al usuario'}), 404
-    except Exception as e:
-        current_app.logger.error(f'Error al obtener mensajes: {str(e)}')
-        return jsonify({'error': 'Ocurrió un error al obtener los mensajes'}), 500
-
-
-        
-@main.route('/me', methods=['GET'])
-@jwt_required()
-def get_current_user():
-    current_user_id = get_jwt_identity()
-    try:
-        user = User.objects.get(id=current_user_id)
-        user_data = {
-            'id': str(user.id),
-            'username': user.username,
-            'email': user.email
-        }
-        return jsonify({'user': user_data}), 200
-    except DoesNotExist:
-        return jsonify({'error': 'Usuario no encontrado'}), 404

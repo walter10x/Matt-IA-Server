@@ -1,2 +1,15 @@
 .env
 **/__pycache__/
+/path/to/your/firebase/firebasecredentials.json
+certs/
+flask_session/
+*.pyc
+__pycache__/
+
+
+# Ignorar archivos de entorno virtual
+venv/
+env/
+
+# Ignorar archivos de logs
+*.log
