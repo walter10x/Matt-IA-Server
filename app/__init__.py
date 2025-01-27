@@ -16,7 +16,7 @@ def create_app():
     firebase_admin.initialize_app(cred)
 
     # Importar y registrar rutas
-    from .routes import main
-    app.register_blueprint(main)
+    from .routes.auth import auth as auth_blueprint
+    app.register_blueprint(auth_blueprint)
 
     return app

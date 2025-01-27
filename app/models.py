@@ -30,7 +30,8 @@ class User(Document):
             email=email,
             username=email.split('@')[0],  # Usar la parte local del email como username
             name=name,
-            picture=picture
+            picture=picture,
+            firebase_uid=google_id  # Asegúrate de que firebase_uid tenga un valor válido
         )
         user.save()
         return user

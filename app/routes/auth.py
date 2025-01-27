@@ -1,29 +1,28 @@
 from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
 from google_auth_oauthlib.flow import Flow
 from google.oauth2 import id_token
-from google.auth.transport import requests
-import requests
-from firebase_admin import auth
+from google.auth.transport import requests as google_requests  # Renombrar para evitar conflictos
+import requests  # Importar el módulo requests para las solicitudes HTTP
+from firebase_admin import auth as firebase_auth
 from firebase_admin import exceptions as firebase_exceptions
 from mongoengine import errors as mongo_errors, NotUniqueError
-from .config import Config
+from ..config import Config
 
 from datetime import datetime
 
-from .models import User
+from ..models import User
 
-main = Blueprint('main', __name__)
+auth = Blueprint('auth', __name__)
 
-@main.route('/')
+@auth.route('/')
 def index():
     if 'user' in session:
         return f"Bienvenido a Matt-IA, {session['user']['name']}. <a href='/perfil'>Ver perfil</a> | <a href='/logout'>Cerrar sesión</a>"
     else:
         return "Bienvenido a Matt-IA. <a href='/login/google'>Iniciar sesión con Google</a>"
-    
-    #ENDPOIN PARA EL REGISTRO CON FIREBASE 
 
-@main.route('/register', methods=['POST'])
+# ENDPOINT PARA EL REGISTRO CON FIREBASE
+@auth.route('/register', methods=['POST'])
 def register():
     email = request.json.get('email')
     password = request.json.get('password')
@@ -35,9 +34,9 @@ def register():
     try:
         # Verificar si el email ya existe en Firebase
         try:
-            auth.get_user_by_email(email)
+            firebase_auth.get_user_by_email(email)
             return jsonify({"error": "Este correo electrónico ya está registrado. Por favor, usa otro."}), 400
-        except auth.UserNotFoundError:
+        except firebase_auth.UserNotFoundError:
             pass
 
         # Verificar si el email o username ya existen en MongoDB
@@ -50,7 +49,7 @@ def register():
             return jsonify({"error": "Este nombre de usuario ya está tomado. Por favor, elige otro."}), 400
 
         # Crear usuario en Firebase
-        firebase_user = auth.create_user(
+        firebase_user = firebase_auth.create_user(
             email=email,
             password=password
         )
@@ -88,10 +87,9 @@ def register():
             return jsonify({"error": "Ha ocurrido un error inesperado. Por favor, inténtalo de nuevo más tarde."}), 400
         else:
             return jsonify({"error": "Ha ocurrido un error inesperado. Por favor, inténtalo de nuevo."}), 500
-        
-        #ENDPOINT PARA EL LOGIN CON FIREBASE
 
-@main.route('/login', methods=['POST'])
+# ENDPOINT PARA EL LOGIN CON FIREBASE
+@auth.route('/login', methods=['POST'])
 def login():
     email = request.json.get('email')
     password = request.json.get('password')
@@ -116,7 +114,7 @@ def login():
         if response.status_code == 200:
             auth_data = response.json()
             # Verificar el token ID
-            decoded_token = auth.verify_id_token(auth_data['idToken'])
+            decoded_token = firebase_auth.verify_id_token(auth_data['idToken'])
             
             return jsonify({
                 "message": "Inicio de sesión exitoso",
@@ -127,14 +125,14 @@ def login():
         else:
             return jsonify({"error": "Credenciales inválidas"}), 401
 
-    except auth.InvalidIdTokenError:
+    except firebase_auth.InvalidIdTokenError:
         return jsonify({"error": "Token inválido"}), 401
     except requests.RequestException as e:
         return jsonify({"error": f"Error de red: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Error en el inicio de sesión: {str(e)}"}), 500
 
-@main.route('/login/google')
+@auth.route('/login/google')
 def google_login():
     flow = Flow.from_client_config(
         {
@@ -152,7 +150,7 @@ def google_login():
     session['state'] = state
     return redirect(authorization_url)
 
-@main.route('/login/google/callback')
+@auth.route('/login/google/callback')
 def google_callback():
     flow = Flow.from_client_config(
         {
@@ -172,11 +170,11 @@ def google_callback():
 
     credentials = flow.credentials
     id_info = id_token.verify_oauth2_token(
-        credentials.id_token, requests.Request(), current_app.config['GOOGLE_CLIENT_ID']
+        credentials.id_token, google_requests.Request(), current_app.config['GOOGLE_CLIENT_ID']
     )
 
     # Crear un token personalizado de Firebase
-    custom_token = auth.create_custom_token(id_info['sub'])
+    custom_token = firebase_auth.create_custom_token(id_info['sub'])  # Uso del alias corregido
 
     # Buscar o crear usuario en MongoDB
     user = User.objects(google_id=id_info['sub']).first()
@@ -193,6 +191,8 @@ def google_callback():
             name=id_info.get('name', ''),
             picture=id_info.get('picture', '')
         )
+        user.firebase_uid = id_info['sub']  # Asegúrate de que firebase_uid tenga un valor válido
+        user.save()
 
     # Almacenar información del usuario en la sesión
     session['user'] = {
@@ -204,16 +204,17 @@ def google_callback():
     }
 
     # Aquí puedes decidir a dónde redirigir al usuario después del login
-    return redirect(url_for('main.perfil'))
+    return redirect(url_for('auth.perfil'))
+    
 
-@main.route('/perfil')
+@auth.route('/perfil')
 def perfil():
     if 'user' in session:
         return f"Bienvenido, {session['user']['name']}. Tu email es: {session['user']['email']}"
     else:
         return "No has iniciado sesión."
 
-@main.route('/logout')
+@auth.route('/logout')
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
