@@ -185,13 +185,25 @@ def google_callback():
         user.last_login = datetime.utcnow()
         user.save()
     else:
+        # Crear usuario en Firebase si no existe
+        try:
+            firebase_user = firebase_auth.get_user(id_info['sub'])
+        except firebase_auth.UserNotFoundError:
+            firebase_user = firebase_auth.create_user(
+                uid=id_info['sub'],
+                email=id_info['email'],
+                display_name=id_info.get('name', ''),
+                photo_url=id_info.get('picture', '')
+            )
+
+        # Crear usuario en MongoDB
         user = User.create_google_user(
             google_id=id_info['sub'],
             email=id_info['email'],
             name=id_info.get('name', ''),
             picture=id_info.get('picture', '')
         )
-        user.firebase_uid = id_info['sub']  # Asegúrate de que firebase_uid tenga un valor válido
+        user.firebase_uid = id_info['sub']
         user.save()
 
     # Almacenar información del usuario en la sesión
