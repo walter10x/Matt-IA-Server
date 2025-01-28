@@ -116,7 +116,7 @@ def login():
             decoded_token = firebase_auth.verify_id_token(auth_data['idToken'])
             
             # Generar token JWT
-            jwt_token = create_access_token(identity=decoded_token['uid'])
+            jwt_token = create_access_token(identity=decoded_token['uid']) #Antes usaba el 'uid' 
             
             # Imprimir el token JWT
             print("Token JWT generado:", jwt_token)
@@ -217,7 +217,10 @@ def google_callback():
         user.save()
 
     # Generar token JWT
-    jwt_token = create_access_token(identity=str(user.id))
+    #jwt_token = create_access_token(identity=str(user.id))
+    jwt_token = create_access_token(identity=id_info['sub'])
+    
+    
 
     # Almacenar información del usuario en la sesión
     session['user'] = {
@@ -256,7 +259,7 @@ def perfil():
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
 @auth.route('/logout')
-@jwt_required()
+#@jwt_required()
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
