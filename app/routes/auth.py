@@ -1,6 +1,7 @@
 from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
 from google_auth_oauthlib.flow import Flow
-from flask_jwt_extended import jwt_required
+import jwt
+from flask_jwt_extended import get_jwt_identity, jwt_required,create_access_token
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests  # Renombrar para evitar conflictos
 import requests  # Importar el módulo requests para las solicitudes HTTP
@@ -99,10 +100,8 @@ def login():
         return jsonify({"error": "Email y contraseña son requeridos"}), 400
 
     try:
-        # Obtener la clave de API web de Firebase desde la configuración
         web_api_key = Config.FIREBASE_WEB_API_KEY
 
-        # Usar la API REST de Firebase para iniciar sesión
         response = requests.post(
             f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={web_api_key}",
             json={
@@ -114,14 +113,24 @@ def login():
 
         if response.status_code == 200:
             auth_data = response.json()
-            # Verificar el token ID
             decoded_token = firebase_auth.verify_id_token(auth_data['idToken'])
+            
+            # Generar token JWT
+            jwt_token = create_access_token(identity=decoded_token['uid'])
+            
+            # Imprimir el token JWT
+            print("Token JWT generado:", jwt_token)
+            
+            # Decodificar el token JWT para ver su contenido
+            decoded_jwt = jwt.decode(jwt_token, options={"verify_signature": False})
+            print("Contenido del token JWT:", decoded_jwt)
             
             return jsonify({
                 "message": "Inicio de sesión exitoso",
                 "uid": decoded_token['uid'],
                 "email": decoded_token['email'],
-                "token": auth_data['idToken']
+                "firebase_token": auth_data['idToken'],
+                "jwt_token": jwt_token
             }), 200
         else:
             return jsonify({"error": "Credenciales inválidas"}), 401
@@ -207,13 +216,17 @@ def google_callback():
         user.firebase_uid = id_info['sub']
         user.save()
 
+    # Generar token JWT
+    jwt_token = create_access_token(identity=id_info['sub'])
+
     # Almacenar información del usuario en la sesión
     session['user'] = {
         'id': str(user.id),
         'google_id': user.google_id,
         'email': user.email,
         'name': user.name,
-        'picture': user.picture
+        'picture': user.picture,
+        'jwt_token': jwt_token  # Agregar el token JWT a la sesión
     }
 
     # Aquí puedes decidir a dónde redirigir al usuario después del login
@@ -229,8 +242,16 @@ def perfil():
         return "No has iniciado sesión."
 
 @auth.route('/logout')
-@jwt_required()
+#@jwt_required()
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
+
+
+@auth.route('/protected', methods=['GET'])
+@jwt_required()
+def protected():
+    current_user_id = get_jwt_identity()
+    user = User.objects(id=current_user_id).first()
+    return jsonify({'username': user.username, 'email': user.email}), 200
 

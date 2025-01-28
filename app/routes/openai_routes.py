@@ -9,7 +9,7 @@ ai = Blueprint('ai', __name__)
 @jwt_required()
 def ask_openai():
     """Consulta a OpenAI."""
-    current_user_id = get_jwt_identity()  # Obtiene el ID del usuario autenticado
+    current_user_firebase_uid = get_jwt_identity()  # Obtiene el firebase_uid del usuario autenticado
     data = request.get_json()
     prompt = data.get('prompt')
 
@@ -17,11 +17,16 @@ def ask_openai():
         return jsonify({'error': 'Falta el mensaje (prompt)'}), 400
 
     try:
+        # Buscar al usuario por firebase_uid
+        user = User.objects(firebase_uid=current_user_firebase_uid).first()
+        if not user:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+
         # Verificar si ya existe un hilo activo para el usuario
-        active_thread = Thread.objects(user=current_user_id).first()
+        active_thread = Thread.objects(user=user).first()
         if not active_thread:
             # Si no existe, crea uno nuevo
-            active_thread = Thread(user=User.objects.get(id=current_user_id), title="Nuevo chat")
+            active_thread = Thread(user=user, title="Nuevo chat")
             active_thread.save()
 
         # Obtener respuesta de OpenAI

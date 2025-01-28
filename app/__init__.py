@@ -9,12 +9,11 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-
     # Conexión a MongoDB
     connect(host=app.config['MONGODB_URI'])
 
-    #configuraccion de JWT
-    app.config['JWT_SECRET_KEY'] = "drimaldnosjisgdbgbhjiuueirjoujhgjrhgiurg7eryg9ojterbunite87rerwuohoujneg6573459y98734gh3ghoghsdough"
+    # Configuración de JWT
+    app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
     jwt = JWTManager(app)
 
     # Inicialización de Firebase
