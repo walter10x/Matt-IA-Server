@@ -18,7 +18,7 @@ def get_chat_completion(prompt):
     try:
         # Usar el método correcto para obtener respuestas de chat
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Puedes usar gpt-4 si tienes acceso
+            model="gpt-4o-mini",  
             messages=[
                 {"role": "system", "content": "Eres un asistente útil. y tu Nombre es MattIA"},
                 {"role": "user", "content": prompt}

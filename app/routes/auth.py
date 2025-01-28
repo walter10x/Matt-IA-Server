@@ -1,5 +1,6 @@
 from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
 from google_auth_oauthlib.flow import Flow
+from flask_jwt_extended import jwt_required
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests  # Renombrar para evitar conflictos
 import requests  # Importar el módulo requests para las solicitudes HTTP
@@ -220,6 +221,7 @@ def google_callback():
     
 
 @auth.route('/perfil')
+@jwt_required()
 def perfil():
     if 'user' in session:
         return f"Bienvenido, {session['user']['name']}. Tu email es: {session['user']['email']}"
@@ -227,6 +229,7 @@ def perfil():
         return "No has iniciado sesión."
 
 @auth.route('/logout')
+@jwt_required()
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
