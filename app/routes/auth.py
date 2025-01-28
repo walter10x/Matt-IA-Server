@@ -217,7 +217,7 @@ def google_callback():
         user.save()
 
     # Generar token JWT
-    jwt_token = create_access_token(identity=id_info['sub'])
+    jwt_token = create_access_token(identity=str(user.id))
 
     # Almacenar información del usuario en la sesión
     session['user'] = {
@@ -229,29 +229,63 @@ def google_callback():
         'jwt_token': jwt_token  # Agregar el token JWT a la sesión
     }
 
-    # Aquí puedes decidir a dónde redirigir al usuario después del login
-    return redirect(url_for('auth.perfil'))
-    
+    # Devolver un JSON con el token JWT y la información del usuario
+    return jsonify({
+        "message": "Inicio de sesión con Google exitoso",
+        "uid": id_info['sub'],
+        "email": id_info['email'],
+        "redirect_url": url_for('auth.perfil'),
+        "jwt_token": jwt_token,
+        "user_info": {
+            "id": str(user.id),
+            "google_id": user.google_id,
+            "email": user.email,
+            "name": user.name,
+            "picture": user.picture
+        }
+    }), 200
 
 @auth.route('/perfil')
 @jwt_required()
 def perfil():
-    if 'user' in session:
-        return f"Bienvenido, {session['user']['name']}. Tu email es: {session['user']['email']}"
+    current_user_id = get_jwt_identity()
+    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
+    if user:
+        return jsonify({'username': user.username, 'email': user.email}), 200
     else:
-        return "No has iniciado sesión."
+        return jsonify({'error': 'Usuario no encontrado'}), 404
 
 @auth.route('/logout')
-#@jwt_required()
+@jwt_required()
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
-
 
 @auth.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
     current_user_id = get_jwt_identity()
+    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
+    if user:
+        return jsonify({'username': user.username, 'email': user.email}), 200
+    else:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+    
+
+@auth.route('/me')
+@jwt_required()
+def get_user_info():
+    current_user_id = get_jwt_identity()
     user = User.objects(id=current_user_id).first()
-    return jsonify({'username': user.username, 'email': user.email}), 200
+    if user:
+        return jsonify({
+            "id": str(user.id),
+            "google_id": user.google_id,
+            "email": user.email,
+            "name": user.name,
+            "picture": user.picture
+        }), 200
+    else:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
 
