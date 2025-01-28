@@ -1,7 +1,6 @@
 from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
 from google_auth_oauthlib.flow import Flow
-import jwt
-from flask_jwt_extended import get_jwt_identity, jwt_required,create_access_token
+from flask_jwt_extended import get_jwt_identity, jwt_required, create_access_token
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests  # Renombrar para evitar conflictos
 import requests  # Importar el módulo requests para las solicitudes HTTP
@@ -100,8 +99,10 @@ def login():
         return jsonify({"error": "Email y contraseña son requeridos"}), 400
 
     try:
+        # Obtener la clave de API web de Firebase desde la configuración
         web_api_key = Config.FIREBASE_WEB_API_KEY
 
+        # Usar la API REST de Firebase para iniciar sesión
         response = requests.post(
             f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={web_api_key}",
             json={
@@ -113,17 +114,11 @@ def login():
 
         if response.status_code == 200:
             auth_data = response.json()
+            # Verificar el token ID
             decoded_token = firebase_auth.verify_id_token(auth_data['idToken'])
             
             # Generar token JWT
-            jwt_token = create_access_token(identity=decoded_token['uid']) #Antes usaba el 'uid' 
-            
-            # Imprimir el token JWT
-            print("Token JWT generado:", jwt_token)
-            
-            # Decodificar el token JWT para ver su contenido
-            decoded_jwt = jwt.decode(jwt_token, options={"verify_signature": False})
-            print("Contenido del token JWT:", decoded_jwt)
+            jwt_token = create_access_token(identity=decoded_token['uid'])
             
             return jsonify({
                 "message": "Inicio de sesión exitoso",
@@ -184,7 +179,7 @@ def google_callback():
     )
 
     # Crear un token personalizado de Firebase
-    custom_token = firebase_auth.create_custom_token(id_info['sub'])  # Uso del alias corregido
+    custom_token = firebase_auth.create_custom_token(id_info['sub'])
 
     # Buscar o crear usuario en MongoDB
     user = User.objects(google_id=id_info['sub']).first()
@@ -217,10 +212,7 @@ def google_callback():
         user.save()
 
     # Generar token JWT
-    #jwt_token = create_access_token(identity=str(user.id))
     jwt_token = create_access_token(identity=id_info['sub'])
-    
-    
 
     # Almacenar información del usuario en la sesión
     session['user'] = {
@@ -237,7 +229,7 @@ def google_callback():
         "message": "Inicio de sesión con Google exitoso",
         "uid": id_info['sub'],
         "email": id_info['email'],
-        "redirect_url": url_for('auth.perfil'),
+        "firebase_token": credentials.id_token,  # Devolver el token de Firebase
         "jwt_token": jwt_token,
         "user_info": {
             "id": str(user.id),
@@ -259,7 +251,7 @@ def perfil():
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
 @auth.route('/logout')
-#@jwt_required()
+@jwt_required()
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
@@ -273,13 +265,12 @@ def protected():
         return jsonify({'username': user.username, 'email': user.email}), 200
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
-    
 
 @auth.route('/me')
 @jwt_required()
 def get_user_info():
     current_user_id = get_jwt_identity()
-    user = User.objects(id=current_user_id).first()
+    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
     if user:
         return jsonify({
             "id": str(user.id),
@@ -290,5 +281,4 @@ def get_user_info():
         }), 200
     else:
         return jsonify({"error": "Usuario no encontrado"}), 404
-
 

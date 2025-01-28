@@ -36,7 +36,7 @@ def ask_openai():
         user_message = Message(thread=active_thread, sender='user', content=prompt)
         user_message.save()
 
-        # Guardar respuesta del asistente
+        # Guardar respuesta del asistente   
         assistant_message = Message(thread=active_thread, sender='assistant', content=response)
         assistant_message.save()
 
