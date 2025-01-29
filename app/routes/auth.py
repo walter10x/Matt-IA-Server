@@ -8,7 +8,6 @@ from firebase_admin import exceptions as firebase_exceptions
 from mongoengine import errors as mongo_errors, NotUniqueError
 from ..config import Config
 from ..middlewares.auth_middleware import token_required
-from datetime import datetime
 from ..models import User
 
 auth = Blueprint('auth', __name__)
@@ -151,6 +150,71 @@ def perfil():
         }), 200
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
+    
+#ENDPOIN PARA ACTUALIZAR USUARIO
+@auth.route('/update', methods=['PUT'])
+@token_required
+def update_user():
+    """Actualiza los datos del usuario autenticado."""
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Buscar al usuario por firebase_uid
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    data = request.get_json()
+    new_name = data.get('name')  # Nuevo nombre (opcional)
+    new_password = data.get('password')  # Nueva contraseña (opcional)
+
+    try:
+        # Si se proporciona un nuevo nombre, actualizarlo en MongoDB
+        if new_name:
+            user.name = new_name
+            user.save()
+
+        # Si se proporciona una nueva contraseña, actualizarla en Firebase
+        if new_password:
+            firebase_auth.update_user(
+                user.firebase_uid,
+                password=new_password
+            )
+
+        return jsonify({
+            'message': 'Usuario actualizado exitosamente',
+            'user_info': {
+                'id': str(user.id),
+                'google_id': user.google_id,
+                'email': user.email,
+                'name': user.name,
+                'picture': user.picture
+            }
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f'Error al actualizar usuario: {str(e)}')
+        return jsonify({'error': f'Ocurrió un error al actualizar el usuario: {str(e)}'}), 500
+
+#ENDPOINT PARA ELIMINAR UN USUARIO    
+@auth.route('/delete', methods=['DELETE'])
+@token_required
+def delete_user():
+    """Elimina al usuario autenticado."""
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Buscar al usuario por firebase_uid
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    try:
+        # Eliminar el usuario en Firebase
+        firebase_auth.delete_user(user.firebase_uid)
+
+        # Eliminar el usuario en MongoDB
+        user.delete()
+
+        return jsonify({'message': 'Usuario eliminado exitosamente'}), 200
+
+    except Exception as e:
+        current_app.logger.error(f'Error al eliminar usuario: {str(e)}')
+        return jsonify({'error': f'Ocurrió un error al eliminar el usuario: {str(e)}'}), 500
+
+
 
 @auth.route('/logout')
 @token_required
@@ -181,5 +245,3 @@ def get_user_info():
         }), 200
     else:
         return jsonify({"error": "Usuario no encontrado"}), 404
-
-

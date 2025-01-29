@@ -9,8 +9,6 @@ from ..config import Config
 
 auth_google = Blueprint('auth_google', __name__)
 
-
-
 @auth_google.route('/login/google')
 def google_login():
     flow = Flow.from_client_config(
