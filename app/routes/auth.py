@@ -1,6 +1,5 @@
 from flask import Blueprint, redirect, url_for, session, request, current_app, jsonify
 from google_auth_oauthlib.flow import Flow
-from flask_jwt_extended import get_jwt_identity, jwt_required, create_access_token
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests  # Renombrar para evitar conflictos
 import requests  # Importar el módulo requests para las solicitudes HTTP
@@ -8,6 +7,7 @@ from firebase_admin import auth as firebase_auth
 from firebase_admin import exceptions as firebase_exceptions
 from mongoengine import errors as mongo_errors, NotUniqueError
 from ..config import Config
+from ..middlewares.auth_middleware import token_required
 
 from datetime import datetime
 
@@ -117,15 +117,11 @@ def login():
             # Verificar el token ID
             decoded_token = firebase_auth.verify_id_token(auth_data['idToken'])
             
-            # Generar token JWT
-            jwt_token = create_access_token(identity=decoded_token['uid'])
-            
             return jsonify({
                 "message": "Inicio de sesión exitoso",
                 "uid": decoded_token['uid'],
                 "email": decoded_token['email'],
-                "firebase_token": auth_data['idToken'],
-                "jwt_token": jwt_token
+                "firebase_token": auth_data['idToken']
             }), 200
         else:
             return jsonify({"error": "Credenciales inválidas"}), 401
@@ -183,13 +179,7 @@ def google_callback():
 
     # Buscar o crear usuario en MongoDB
     user = User.objects(google_id=id_info['sub']).first()
-    if user:
-        user.name = id_info.get('name', '')
-        user.email = id_info['email']
-        user.picture = id_info.get('picture', '')
-        user.last_login = datetime.utcnow()
-        user.save()
-    else:
+    if not user:
         # Crear usuario en Firebase si no existe
         try:
             firebase_user = firebase_auth.get_user(id_info['sub'])
@@ -210,9 +200,12 @@ def google_callback():
         )
         user.firebase_uid = id_info['sub']
         user.save()
-
-    # Generar token JWT
-    jwt_token = create_access_token(identity=id_info['sub'])
+    else:
+        user.name = id_info.get('name', '')
+        user.email = id_info['email']
+        user.picture = id_info.get('picture', '')
+        user.last_login = datetime.utcnow()
+        user.save()
 
     # Almacenar información del usuario en la sesión
     session['user'] = {
@@ -220,17 +213,15 @@ def google_callback():
         'google_id': user.google_id,
         'email': user.email,
         'name': user.name,
-        'picture': user.picture,
-        'jwt_token': jwt_token  # Agregar el token JWT a la sesión
+        'picture': user.picture
     }
 
-    # Devolver un JSON con el token JWT y la información del usuario
+    # Devolver un JSON con el token de Firebase y la información del usuario
     return jsonify({
         "message": "Inicio de sesión con Google exitoso",
         "uid": id_info['sub'],
         "email": id_info['email'],
-        "firebase_token": credentials.id_token,  # Devolver el token de Firebase
-        "jwt_token": jwt_token,
+        "firebase_token": credentials.id_token,
         "user_info": {
             "id": str(user.id),
             "google_id": user.google_id,
@@ -241,36 +232,44 @@ def google_callback():
     }), 200
 
 @auth.route('/perfil')
-@jwt_required()
+@token_required
 def perfil():
-    current_user_id = get_jwt_identity()
-    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
     if user:
-        return jsonify({'username': user.username, 'email': user.email}), 200
+        return jsonify({
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "google_id": user.google_id,
+            "firebase_uid": user.firebase_uid,
+            "name": user.name,
+            "picture": user.picture,
+            "last_login": user.last_login,  # Fecha del último inicio de sesión
+            "created_at": user.created_at,  # Fecha de creación del usuario
+            # Agrega más campos según tu modelo User
+        }), 200
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
 @auth.route('/logout')
-@jwt_required()
+@token_required
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
 
 @auth.route('/protected', methods=['GET'])
-@jwt_required()
+@token_required
 def protected():
-    current_user_id = get_jwt_identity()
-    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
     if user:
         return jsonify({'username': user.username, 'email': user.email}), 200
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
 @auth.route('/me')
-@jwt_required()
+@token_required
 def get_user_info():
-    current_user_id = get_jwt_identity()
-    user = User.objects(firebase_uid=current_user_id).first()  # Usar firebase_uid en lugar de id
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
     if user:
         return jsonify({
             "id": str(user.id),
@@ -281,4 +280,5 @@ def get_user_info():
         }), 200
     else:
         return jsonify({"error": "Usuario no encontrado"}), 404
+
 

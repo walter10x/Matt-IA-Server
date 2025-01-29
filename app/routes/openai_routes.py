@@ -1,15 +1,15 @@
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
 from ..models import User, Thread, Message
 from ..services.openai_client import get_chat_completion
+from ..middlewares.auth_middleware import token_required
 
 ai = Blueprint('ai', __name__)
 
 @ai.route('/ask', methods=['POST'])
-@jwt_required()
+@token_required
 def ask_openai():
     """Consulta a OpenAI."""
-    current_user_firebase_uid = get_jwt_identity()  # Obtiene el firebase_uid del usuario autenticado
+    current_user_firebase_uid = request.user['uid']  # Obtiene el uid del usuario del token verificado
     data = request.get_json()
     prompt = data.get('prompt')
 
