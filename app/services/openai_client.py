@@ -8,23 +8,27 @@ load_dotenv()
 # Inicializar el cliente de OpenAI
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-def get_chat_completion(prompt):
-    """
-    Función que envía un prompt a la API de OpenAI (versión 1.46.1+) y devuelve la respuesta.
-    
-    :param prompt: El texto que el usuario envía para obtener una respuesta.
-    :return: Respuesta generada por el modelo de OpenAI.
-    """
+def get_chat_completion(prompt, thread_messages):
     try:
-        # Usar el método correcto para obtener respuestas de chat
+        messages = [
+            {"role": "system", "content": "Eres un asistente útil llamado MattIA. Mantén el contexto de la conversación."}
+        ]
+        
+        # Convertir el cursor a una lista y obtener los últimos 5 mensajes
+        recent_messages = list(thread_messages)[-5:]
+        
+        for msg in recent_messages:
+            messages.append({
+                "role": "user" if msg.sender == "user" else "assistant",
+                "content": msg.content
+            })
+        
+        messages.append({"role": "user", "content": prompt})
+        
         response = client.chat.completions.create(
             model="gpt-4o-mini",  
-            messages=[
-                {"role": "system", "content": "Eres un asistente útil. y tu Nombre es MattIA"},
-                {"role": "user", "content": prompt}
-            ]
+            messages=messages
         )
-        # Devolver el contenido de la respuesta generada por el modelo
         return response.choices[0].message.content
     except Exception as e:
         return f"Ocurrió un error al procesar la solicitud: {str(e)}"

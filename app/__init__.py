@@ -25,6 +25,9 @@ def create_app():
    
     from .routes.auth_google import auth_google as auth_google_blueprint
     app.register_blueprint(auth_google_blueprint)
+
+    from .routes.thread_routes import thread_routes as thread_routes_blueprint
+    app.register_blueprint(thread_routes_blueprint)
   
 
     return app
