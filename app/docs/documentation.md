@@ -59,6 +59,22 @@ Estructura del Proyecto:
 ├── requirements.txt
 └── run.py
 
+Certificados Https:
+
+ La aplicación utiliza certificados SSL generados con OpenSSL. Estos certificados son esenciales para establecer conexiones seguras entre el cliente y el servidor. Los archivos clave para esta configuración son:
+server.key: La clave privada del servidor
+server.crt: El certificado del servidor
+Estos archivos se generan utilizando OpenSSL y deben ubicarse en un directorio seguro accesible por la aplicación1. Para configurar Flask para usar HTTPS con estos certificados, se debe modificar la inicialización del servidor de la siguiente manera:
+python
+if __name__ == '__main__':
+    app.run(ssl_context=('path/to/server.crt', 'path/to/server.key'))
+Esta configuración permite que la aplicación maneje conexiones HTTPS de forma segura, proporcionando cifrado y autenticación para todas las comunicaciones entre el cliente y el servidor1.
+Configuración de SSL
+Para generar los certificados SSL necesarios, se pueden usar los siguientes comandos de OpenSSL:
+bash
+openssl req -x509 -newkey rsa:4096 -nodes -out server.crt -keyout server.key -days 365
+Este comando generará un certificado autofirmado válido por 365 días. En un entorno de producción, se recomienda obtener un certificado de una Autoridad de Certificación (CA) reconocida1.
+
 Modelos de Datos:
 
 User
