@@ -29,5 +29,4 @@ def create_app():
     from .routes.thread_routes import thread_routes as thread_routes_blueprint
     app.register_blueprint(thread_routes_blueprint)
   
-
     return app
