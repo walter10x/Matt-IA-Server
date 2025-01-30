@@ -19,4 +19,14 @@ def create_app():
     from .routes.auth import auth as auth_blueprint
     app.register_blueprint(auth_blueprint)
 
+    # Importar y registrar el blueprint de OpenAI
+    from .routes.openai_routes import ai as ai_blueprint
+    app.register_blueprint(ai_blueprint, url_prefix='/ai')
+   
+    from .routes.auth_google import auth_google as auth_google_blueprint
+    app.register_blueprint(auth_google_blueprint)
+
+    from .routes.thread_routes import thread_routes as thread_routes_blueprint
+    app.register_blueprint(thread_routes_blueprint)
+  
     return app

@@ -53,22 +53,47 @@ class Thread(Document):
         self.updated_at = datetime.utcnow()
         self.save()
 
-    def update_context_summary(self,summary):
-        self.context_summary = summary
-        self.save()    
+    def update_context_summary(self):
+        """
+        Genera un resumen de la conversación en el hilo.
+        """
+        user_messages = [msg.content for msg in self.messages if msg.sender == 'user']  # Filtra mensajes del usuario
+        assistant_messages = [msg.content for msg in self.messages if msg.sender == 'assistant']  # Filtra mensajes del asistente
+        
+        summary = "Resumen de la conversación:\n"  # Inicializa el resumen
+        summary += "\n".join([f"Usuario: {msg}" for msg in user_messages])  # Agrega mensajes del usuario al resumen
+        summary += "\n" + "\n".join([f"Asistente: {msg}" for msg in assistant_messages])  # Agrega mensajes del asistente al resumen
+        
+        self.context_summary = summary  # Asigna el resumen al campo context_summary
+        self.save()  # Guarda los cambios en la base de datos 
 
 class Message(Document):
     """
     Modelo para representar un mensaje dentro de un hilo.
     """
-    thread = ReferenceField(Thread, required=True, reverse_delete_rule=2)
+    thread = ReferenceField('Thread', required=True, reverse_delete_rule=2)
     sender = StringField(required=True, choices=('user', 'system', 'assistant'))
     content = StringField(required=True)
     created_at = DateTimeField(default=datetime.utcnow)
-    metadata = DictField() # Nuevo campo para almacenar metadatos del mensaje
-   
+    metadata = DictField()  # Campo para almacenar metadatos del mensaje
+
     def add_metadata(self, key, value):
+        """
+        Añade o actualiza un metadato del mensaje.
+        """
         if not self.metadata:
             self.metadata = {}
         self.metadata[key] = value
         self.save()
+
+    def to_dict(self):
+        """
+        Convierte el mensaje a un diccionario para facilitar su serialización.
+        """
+        return {
+            'id': str(self.id),
+            'sender': self.sender,
+            'content': self.content,
+            'created_at': self.created_at.isoformat(),
+            'metadata': self.metadata
+        }
