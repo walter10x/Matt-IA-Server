@@ -7,9 +7,7 @@ from firebase_admin import auth as firebase_auth
 from firebase_admin import exceptions as firebase_exceptions
 from mongoengine import errors as mongo_errors, NotUniqueError
 from ..config import Config
-
-from datetime import datetime
-
+from ..middlewares.auth_middleware import token_required
 from ..models import User
 
 auth = Blueprint('auth', __name__)
@@ -120,7 +118,7 @@ def login():
                 "message": "Inicio de sesión exitoso",
                 "uid": decoded_token['uid'],
                 "email": decoded_token['email'],
-                "token": auth_data['idToken']
+                "firebase_token": auth_data['idToken']
             }), 200
         else:
             return jsonify({"error": "Credenciales inválidas"}), 401
@@ -132,102 +130,118 @@ def login():
     except Exception as e:
         return jsonify({"error": f"Error en el inicio de sesión: {str(e)}"}), 500
 
-@auth.route('/login/google')
-def google_login():
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": current_app.config['GOOGLE_CLIENT_ID'],
-                "client_secret": current_app.config['GOOGLE_SECRET'],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
-        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
-    )
-    flow.redirect_uri = current_app.config['GOOGLE_REDIRECT_URI']
-    authorization_url, state = flow.authorization_url(prompt='select_account')
-    session['state'] = state
-    return redirect(authorization_url)
-
-@auth.route('/login/google/callback')
-def google_callback():
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": current_app.config['GOOGLE_CLIENT_ID'],
-                "client_secret": current_app.config['GOOGLE_SECRET'],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
-        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
-        state=session['state']
-    )
-    flow.redirect_uri = current_app.config['GOOGLE_REDIRECT_URI']
-
-    flow.fetch_token(authorization_response=request.url)
-
-    credentials = flow.credentials
-    id_info = id_token.verify_oauth2_token(
-        credentials.id_token, google_requests.Request(), current_app.config['GOOGLE_CLIENT_ID']
-    )
-
-    # Crear un token personalizado de Firebase
-    custom_token = firebase_auth.create_custom_token(id_info['sub'])  # Uso del alias corregido
-
-    # Buscar o crear usuario en MongoDB
-    user = User.objects(google_id=id_info['sub']).first()
-    if user:
-        user.name = id_info.get('name', '')
-        user.email = id_info['email']
-        user.picture = id_info.get('picture', '')
-        user.last_login = datetime.utcnow()
-        user.save()
-    else:
-        # Crear usuario en Firebase si no existe
-        try:
-            firebase_user = firebase_auth.get_user(id_info['sub'])
-        except firebase_auth.UserNotFoundError:
-            firebase_user = firebase_auth.create_user(
-                uid=id_info['sub'],
-                email=id_info['email'],
-                display_name=id_info.get('name', ''),
-                photo_url=id_info.get('picture', '')
-            )
-
-        # Crear usuario en MongoDB
-        user = User.create_google_user(
-            google_id=id_info['sub'],
-            email=id_info['email'],
-            name=id_info.get('name', ''),
-            picture=id_info.get('picture', '')
-        )
-        user.firebase_uid = id_info['sub']
-        user.save()
-
-    # Almacenar información del usuario en la sesión
-    session['user'] = {
-        'id': str(user.id),
-        'google_id': user.google_id,
-        'email': user.email,
-        'name': user.name,
-        'picture': user.picture
-    }
-
-    # Aquí puedes decidir a dónde redirigir al usuario después del login
-    return redirect(url_for('auth.perfil'))
-    
 
 @auth.route('/perfil')
+@token_required
 def perfil():
-    if 'user' in session:
-        return f"Bienvenido, {session['user']['name']}. Tu email es: {session['user']['email']}"
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
+    if user:
+        return jsonify({
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "google_id": user.google_id,
+            "firebase_uid": user.firebase_uid,
+            "name": user.name,
+            "picture": user.picture,
+            "last_login": user.last_login,  # Fecha del último inicio de sesión
+            "created_at": user.created_at,  # Fecha de creación del usuario
+            # Agrega más campos según tu modelo User
+        }), 200
     else:
-        return "No has iniciado sesión."
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+    
+#ENDPOIN PARA ACTUALIZAR USUARIO
+@auth.route('/update', methods=['PUT'])
+@token_required
+def update_user():
+    """Actualiza los datos del usuario autenticado."""
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Buscar al usuario por firebase_uid
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    data = request.get_json()
+    new_name = data.get('name')  # Nuevo nombre (opcional)
+    new_password = data.get('password')  # Nueva contraseña (opcional)
+
+    try:
+        # Si se proporciona un nuevo nombre, actualizarlo en MongoDB
+        if new_name:
+            user.name = new_name
+            user.save()
+
+        # Si se proporciona una nueva contraseña, actualizarla en Firebase
+        if new_password:
+            firebase_auth.update_user(
+                user.firebase_uid,
+                password=new_password
+            )
+
+        return jsonify({
+            'message': 'Usuario actualizado exitosamente',
+            'user_info': {
+                'id': str(user.id),
+                'google_id': user.google_id,
+                'email': user.email,
+                'name': user.name,
+                'picture': user.picture
+            }
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f'Error al actualizar usuario: {str(e)}')
+        return jsonify({'error': f'Ocurrió un error al actualizar el usuario: {str(e)}'}), 500
+
+#ENDPOINT PARA ELIMINAR UN USUARIO    
+@auth.route('/delete', methods=['DELETE'])
+@token_required
+def delete_user():
+    """Elimina al usuario autenticado."""
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Buscar al usuario por firebase_uid
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    try:
+        # Eliminar el usuario en Firebase
+        firebase_auth.delete_user(user.firebase_uid)
+
+        # Eliminar el usuario en MongoDB
+        user.delete()
+
+        return jsonify({'message': 'Usuario eliminado exitosamente'}), 200
+
+    except Exception as e:
+        current_app.logger.error(f'Error al eliminar usuario: {str(e)}')
+        return jsonify({'error': f'Ocurrió un error al eliminar el usuario: {str(e)}'}), 500
+
+
 
 @auth.route('/logout')
+@token_required
 def logout():
     session.pop('user', None)
     return "Has cerrado sesión. <a href='/'>Volver al inicio</a>"
 
+@auth.route('/protected', methods=['GET'])
+@token_required
+def protected():
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
+    if user:
+        return jsonify({'username': user.username, 'email': user.email}), 200
+    else:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+@auth.route('/me')
+@token_required
+def get_user_info():
+    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
+    if user:
+        return jsonify({
+            "id": str(user.id),
+            "google_id": user.google_id,
+            "email": user.email,
+            "name": user.name,
+            "picture": user.picture
+        }), 200
+    else:
+        return jsonify({"error": "Usuario no encontrado"}), 404
