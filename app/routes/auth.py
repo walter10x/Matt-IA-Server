@@ -119,6 +119,7 @@ def login():
                 "uid": decoded_token['uid'],
                 "email": decoded_token['email'],
                 "firebase_token": auth_data['idToken']
+               
             }), 200
         else:
             return jsonify({"error": "Credenciales inválidas"}), 401
@@ -129,6 +130,35 @@ def login():
         return jsonify({"error": f"Error de red: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Error en el inicio de sesión: {str(e)}"}), 500
+
+from flask import request, jsonify
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+
+# Endpoint para verificar la validez del token
+@auth.route('/verify-token', methods=['POST'])
+def verify_token():
+    token = request.json.get('token')
+
+    if not token:
+        return jsonify({"error": "Token no proporcionado"}), 400
+
+    try:
+        # Verificar el token con Firebase Admin SDK
+        decoded_token = firebase_auth.verify_id_token(token)
+        return jsonify({
+            "message": "Token válido",
+            "uid": decoded_token['uid'],
+            "email": decoded_token['email']
+        }), 200
+    except firebase_auth.InvalidIdTokenError:
+        return jsonify({"error": "Token inválido"}), 401
+    except firebase_auth.ExpiredIdTokenError:
+        return jsonify({"error": "Token expirado"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Error en la verificación del token: {str(e)}"}), 500
+
+
 
 
 @auth.route('/perfil')
@@ -231,17 +261,28 @@ def protected():
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
+from firebase_admin import auth as firebase_auth
+
 @auth.route('/me')
-@token_required
 def get_user_info():
-    user = User.objects(firebase_uid=request.user['uid']).first()  # Usar firebase_uid en lugar de id
-    if user:
-        return jsonify({
-            "id": str(user.id),
-            "google_id": user.google_id,
-            "email": user.email,
-            "name": user.name,
-            "picture": user.picture
-        }), 200
-    else:
-        return jsonify({"error": "Usuario no encontrado"}), 404
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    
+    try:
+        # Verifica el ID Token de Firebase
+        decoded_token = firebase_auth.verify_id_token(token)
+        user = User.objects(firebase_uid=decoded_token['uid']).first()
+        
+        if user:
+            return jsonify({
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "picture": user.picture
+            }), 200
+        else:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+            
+    except firebase_auth.InvalidIdTokenError:
+        return jsonify({"error": "Token inválido"}), 401
+    except firebase_auth.ExpiredIdTokenError:
+        return jsonify({"error": "Token expirado"}), 401

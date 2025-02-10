@@ -1,5 +1,7 @@
 from flask import Flask, session
 from flask_session import Session
+from flask_cors import CORS
+
 
 from flask_cors import CORS  # Importar CORS
 from dotenv import load_dotenv

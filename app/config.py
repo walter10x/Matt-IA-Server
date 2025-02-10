@@ -12,3 +12,5 @@ class Config:
     FIREBASE_CREDENTIALS_PATH = os.getenv('FIREBASE_CREDENTIALS_PATH')
     FIREBASE_WEB_API_KEY = os.getenv('FIREBASE_WEB_API_KEY')
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
+    # FRONTEND_URL = os.getenv('FRONTEND_URL') if os.getenv('FLASK_ENV') == 'development' else os.getenv('PRODUCTION_FRONTEND_URL')
+    FRONTEND_URL = os.getenv('FRONTEND_URL')
